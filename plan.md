@@ -150,48 +150,91 @@ interface AdminSession {
 }
 ```
 
-## Database Schema (SQLite)
+## Database
 
-```sql
-CREATE TABLE admin_credentials (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  credential_id TEXT UNIQUE NOT NULL,
-  public_key TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+### Stack
 
-CREATE TABLE admin_sessions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT UNIQUE NOT NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  expires_at TEXT NOT NULL
-);
+- **better-sqlite3**: Synchronous SQLite driver (fast, no async overhead)
+- **db-migrate** + **db-migrate-sqlite3**: Schema migrations
+- **Plain SQL**: No ORM, direct parameterized queries
 
-CREATE TABLE pending_authorizations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_code TEXT UNIQUE NOT NULL,
-  user_code TEXT UNIQUE NOT NULL,
-  devpod_name TEXT NOT NULL,
-  requested_repos TEXT NOT NULL,  -- JSON array
-  expires_at TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+### Migration Structure
 
-CREATE TABLE registrations (
-  id TEXT PRIMARY KEY,
-  devpod_name TEXT NOT NULL,
-  registration_token_hash TEXT UNIQUE NOT NULL,
-  allowed_repos TEXT NOT NULL,  -- JSON array
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  revoked_at TEXT,
-  last_token_request TEXT,
-  token_request_count INTEGER NOT NULL DEFAULT 0
-);
+```
+migrations/
+  20240101120000-create-admin-credentials.js
+  20240101120001-create-admin-sessions.js
+  20240101120002-create-pending-authorizations.js
+  20240101120003-create-registrations.js
+```
 
-CREATE INDEX idx_pending_user_code ON pending_authorizations(user_code);
-CREATE INDEX idx_pending_status ON pending_authorizations(status);
-CREATE INDEX idx_registrations_active ON registrations(revoked_at) WHERE revoked_at IS NULL;
+### database.json (db-migrate config)
+
+```json
+{
+  "dev": {
+    "driver": "sqlite3",
+    "filename": { "ENV": "DATABASE_PATH" }
+  },
+  "test": {
+    "driver": "sqlite3",
+    "filename": ":memory:"
+  },
+  "prod": {
+    "driver": "sqlite3",
+    "filename": { "ENV": "DATABASE_PATH" }
+  }
+}
+```
+
+### Example Migration
+
+```javascript
+// migrations/20240101120000-create-admin-credentials.js
+exports.up = function(db) {
+  return db.runSql(`
+    CREATE TABLE admin_credentials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      credential_id TEXT UNIQUE NOT NULL,
+      public_key TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+};
+
+exports.down = function(db) {
+  return db.runSql('DROP TABLE admin_credentials');
+};
+```
+
+### Schema Overview
+
+| Table | Purpose |
+|-------|---------|
+| admin_credentials | WebAuthn credential IDs and public keys |
+| admin_sessions | Active login sessions |
+| pending_authorizations | Device auth requests awaiting approval |
+| registrations | Approved devpods with their allowed repos |
+
+### Query Pattern
+
+```typescript
+// src/lib/db.ts
+import Database from 'better-sqlite3';
+
+const db = new Database(process.env.DATABASE_PATH);
+
+// Parameterized queries - safe from SQL injection
+export function getRegistration(id: string): Registration | undefined {
+  return db.prepare('SELECT * FROM registrations WHERE id = ?').get(id);
+}
+
+export function createRegistration(reg: Registration): void {
+  db.prepare(`
+    INSERT INTO registrations (id, devpod_name, registration_token_hash, allowed_repos, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(reg.id, reg.devpod_name, reg.registration_token_hash, JSON.stringify(reg.allowed_repos), reg.created_at);
+}
 ```
 
 ## Project Structure
@@ -200,7 +243,6 @@ CREATE INDEX idx_registrations_active ON registrations(revoked_at) WHERE revoked
 src/
   index.ts                 # Entry point
   app.ts                   # Express app setup
-  db.ts                    # Database initialization
   routes/
     api.ts                 # API routes
     web.ts                 # Web UI routes
@@ -210,11 +252,17 @@ src/
     github.ts              # GitHub API integration
     registration.ts        # Registration management
   lib/
-    db.ts                  # Database client
+    db.ts                  # Database client (better-sqlite3)
     crypto.ts              # Crypto utilities
+migrations/                # db-migrate SQL migrations
+  20240101120000-create-admin-credentials.js
+  20240101120001-create-admin-sessions.js
+  20240101120002-create-pending-authorizations.js
+  20240101120003-create-registrations.js
+database.json              # db-migrate config
 public/                    # Static assets
 tests/
-  setup.ts                 # Test setup (DB reset, auth helpers)
+  setup.ts                 # Test setup (migrations, auth helpers)
   lib/
     authenticator.ts       # Software FIDO authenticator
   integration/
@@ -399,10 +447,26 @@ Software authenticator that implements WebAuthn protocol:
 
 ### Test Setup Pattern
 
+Uses db-migrate programmatically to run migrations up before tests and down after.
+
 ```typescript
 // tests/setup.ts
+import DBMigrate from 'db-migrate';
+import { beforeAll, afterAll, beforeEach } from 'vitest';
+
+const dbmigrate = DBMigrate.getInstance(true, { env: 'test' });
+
+beforeAll(async () => {
+  await dbmigrate.up();  // Run all migrations
+});
+
+afterAll(async () => {
+  await dbmigrate.reset();  // Roll back all migrations
+});
+
 beforeEach(async () => {
-  await db.exec(`
+  // Clear data between tests (tables exist, just empty them)
+  db.exec(`
     DELETE FROM registrations;
     DELETE FROM pending_authorizations;
     DELETE FROM admin_sessions;
@@ -451,6 +515,10 @@ export default defineConfig({
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "db:migrate": "db-migrate up",
+    "db:rollback": "db-migrate down",
+    "db:reset": "db-migrate reset && db-migrate up",
+    "db:create": "db-migrate create",
     "docker:dev": "docker compose -f docker-compose.dev.yaml up",
     "docker:test": "docker compose -f docker-compose.test.yaml run --rm runner",
     "docker:reset-test-db": "docker compose -f docker-compose.test.yaml down -v && docker compose -f docker-compose.test.yaml up -d app"
@@ -462,7 +530,8 @@ export default defineConfig({
 
 ### Phase 1: Core Infrastructure
 - Express server with TypeScript (--strip-types)
-- SQLite database initialization
+- better-sqlite3 database client
+- db-migrate setup with initial migrations
 - Configuration loading (env vars)
 - Docker Compose for development
 - Health check endpoint
@@ -513,6 +582,8 @@ export default defineConfig({
 |----------|-----------|
 | WebAuthn/Passkeys | Phishing-resistant, works with YubiKey, no passwords, requires physical presence |
 | Device Authorization Flow (RFC 8628) | Works for CLI apps, familiar pattern (GitHub/Google), clear authorization confirmation |
-| SQLite | Zero config, single file, easy backup, no separate server, works well with Docker volumes |
+| SQLite + better-sqlite3 | Zero config, single file, sync API (no async overhead), fast |
+| Plain SQL (no ORM) | Direct control, no abstraction leaks, easier to debug and optimize |
+| db-migrate | Framework-agnostic migrations, programmatic API for test setup, supports up/down |
 | Supertest + Real Database | Tests actual behavior, catches integration issues, fast with SQLite |
 | Software Authenticator | Full WebAuthn testing without hardware, no mocking of security code |
