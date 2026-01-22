@@ -1,0 +1,17 @@
+{
+  "name": "@levino/github-token-cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "github-token": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  }
+}

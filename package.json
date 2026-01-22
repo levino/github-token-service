@@ -1,23 +1,23 @@
 {
   "name": "github-token-service",
   "version": "0.1.0",
+  "private": true,
   "description": "Generate scoped GitHub App installation tokens for devpods",
   "type": "module",
-  "main": "src/index.ts",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "start": "node --experimental-strip-types src/index.ts",
-    "dev": "node --experimental-strip-types --watch src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "dev": "npm run dev --workspace=packages/server",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "tsc --noEmit",
+    "docker:dev": "docker compose -f docker-compose.dev.yaml up",
+    "docker:test": "docker compose -f docker-compose.test.yaml run --rm runner"
   },
   "engines": {
     "node": ">=22.6.0"
   },
-  "keywords": [
-    "github",
-    "token",
-    "devpod"
-  ],
-  "license": "MIT",
   "devDependencies": {
     "typescript": "^5.7.0",
     "@types/node": "^22.0.0"

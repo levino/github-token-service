@@ -1,0 +1,30 @@
+services:
+  server:
+    build:
+      context: ./packages/server
+      dockerfile: Dockerfile
+      target: development
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./packages/server/src:/app/src
+      - ./packages/server/migrations:/app/migrations
+      - ./packages/server/public:/app/public
+      - server_node_modules:/app/node_modules
+      - dev_data:/data
+    environment:
+      - NODE_ENV=development
+      - DATABASE_PATH=/data/token-service.db
+      - PORT=3000
+      - ADMIN_CREDENTIAL=${ADMIN_CREDENTIAL:-}
+      - GITHUB_APP_ID=${GITHUB_APP_ID:-}
+      - GITHUB_APP_PRIVATE_KEY=${GITHUB_APP_PRIVATE_KEY:-}
+      - GITHUB_INSTALLATION_ID=${GITHUB_INSTALLATION_ID:-}
+      - RP_ID=localhost
+      - RP_NAME=GitHub Token Service (Dev)
+      - ORIGIN=http://localhost:3000
+    command: sh -c "npm run db:migrate && npm run dev"
+
+volumes:
+  server_node_modules:
+  dev_data:

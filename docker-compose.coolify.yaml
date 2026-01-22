@@ -1,0 +1,30 @@
+services:
+  server:
+    build:
+      context: ./packages/server
+      dockerfile: Dockerfile
+      target: production
+    ports:
+      - "3000:3000"
+    volumes:
+      - app_data:/data
+    environment:
+      - NODE_ENV=production
+      - DATABASE_PATH=/data/token-service.db
+      - PORT=3000
+      - ADMIN_CREDENTIAL=${ADMIN_CREDENTIAL}
+      - GITHUB_APP_ID=${GITHUB_APP_ID}
+      - GITHUB_APP_PRIVATE_KEY=${GITHUB_APP_PRIVATE_KEY}
+      - GITHUB_INSTALLATION_ID=${GITHUB_INSTALLATION_ID}
+      - RP_ID=${RP_ID}
+      - RP_NAME=${RP_NAME}
+      - ORIGIN=${ORIGIN}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: sh -c "npm run db:migrate && npm start"
+
+volumes:
+  app_data:
