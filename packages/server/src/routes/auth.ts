@@ -1,8 +1,8 @@
-import { Router } from 'express';
 import {
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
 } from '@simplewebauthn/server';
+import { Router } from 'express';
 import { config } from '../config.ts';
 
 // Type for WebAuthn authentication response
@@ -19,6 +19,7 @@ interface AuthenticationResponseJSON {
   clientExtensionResults: Record<string, unknown>;
   type: 'public-key';
 }
+
 import { generateId } from '../lib/crypto.ts';
 import * as sessions from '../services/sessions.ts';
 

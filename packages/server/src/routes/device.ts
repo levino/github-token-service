@@ -1,8 +1,8 @@
+import type { NextFunction, Request, Response } from 'express';
 import { Router } from 'express';
-import type { Request, Response, NextFunction } from 'express';
 import { config } from '../config.ts';
-import { generateId, generateUserCode, generateToken, hashToken } from '../lib/crypto.ts';
-import { run, queryOne } from '../lib/db.ts';
+import { generateId, generateToken, generateUserCode, hashToken } from '../lib/crypto.ts';
+import { queryOne, run } from '../lib/db.ts';
 import { isValidSession } from '../services/sessions.ts';
 
 export const deviceRouter = Router();

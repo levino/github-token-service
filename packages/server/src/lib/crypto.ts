@@ -1,4 +1,4 @@
-import { randomBytes, createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 export function generateId(length = 32): string {
   return randomBytes(length).toString('base64url');
@@ -7,8 +7,14 @@ export function generateId(length = 32): string {
 export function generateUserCode(): string {
   // Format: XXXX-XXXX (uppercase alphanumeric, no confusing chars)
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const part1 = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-  const part2 = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  const part1 = Array.from(
+    { length: 4 },
+    () => chars[Math.floor(Math.random() * chars.length)]
+  ).join('');
+  const part2 = Array.from(
+    { length: 4 },
+    () => chars[Math.floor(Math.random() * chars.length)]
+  ).join('');
   return `${part1}-${part2}`;
 }
 

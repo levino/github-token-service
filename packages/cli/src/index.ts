@@ -1,8 +1,8 @@
 #!/usr/bin/env node --experimental-strip-types
 
-import { register } from './commands/register.ts';
-import { getToken } from './commands/get-token.ts';
 import { config } from './commands/config.ts';
+import { getToken } from './commands/get-token.ts';
+import { register } from './commands/register.ts';
 
 const command = process.argv[2];
 

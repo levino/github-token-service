@@ -1,4 +1,4 @@
-import { getServiceUrl, getRegistrationToken } from './storage.ts';
+import { getRegistrationToken, getServiceUrl } from './storage.ts';
 
 interface DeviceCodeResponse {
   device_code: string;
@@ -52,7 +52,10 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T>
   return response.json();
 }
 
-export async function requestDeviceCode(devpodName: string, repos: string[]): Promise<DeviceCodeResponse> {
+export async function requestDeviceCode(
+  devpodName: string,
+  repos: string[]
+): Promise<DeviceCodeResponse> {
   return fetchJson<DeviceCodeResponse>('/api/device/code', {
     method: 'POST',
     body: JSON.stringify({ devpod_name: devpodName, repos }),
@@ -75,7 +78,7 @@ export async function getGitHubToken(): Promise<TokenResponse> {
   return fetchJson<TokenResponse>('/api/token', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${registrationToken}`,
+      Authorization: `Bearer ${registrationToken}`,
     },
   });
 }

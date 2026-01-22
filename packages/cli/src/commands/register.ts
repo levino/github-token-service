@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util';
-import { requestDeviceCode, pollForAuthorization } from '../lib/api.ts';
-import { saveRegistration, getServiceUrl } from '../lib/storage.ts';
+import { pollForAuthorization, requestDeviceCode } from '../lib/api.ts';
+import { getServiceUrl, saveRegistration } from '../lib/storage.ts';
 
 interface RegisterOptions {
   name: string;
@@ -10,9 +10,9 @@ interface RegisterOptions {
 function parseOptions(): RegisterOptions {
   const { values } = parseArgs({
     options: {
-      'name': { type: 'string' },
-      'repos': { type: 'string' },
-      'help': { type: 'boolean', short: 'h', default: false },
+      name: { type: 'string' },
+      repos: { type: 'string' },
+      help: { type: 'boolean', short: 'h', default: false },
     },
   });
 
@@ -43,12 +43,12 @@ Example:
 
   return {
     name: values.name,
-    repos: values.repos.split(',').map(r => r.trim()),
+    repos: values.repos.split(',').map((r) => r.trim()),
   };
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function register(): Promise<void> {

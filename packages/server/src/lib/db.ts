@@ -20,15 +20,21 @@ export function closeDb(): void {
 
 // Query helpers
 export function query<T>(sql: string, params: unknown[] = []): T[] {
-  return getDb().prepare(sql).all(...params) as T[];
+  return getDb()
+    .prepare(sql)
+    .all(...params) as T[];
 }
 
 export function queryOne<T>(sql: string, params: unknown[] = []): T | undefined {
-  return getDb().prepare(sql).get(...params) as T | undefined;
+  return getDb()
+    .prepare(sql)
+    .get(...params) as T | undefined;
 }
 
 export function run(sql: string, params: unknown[] = []): Database.RunResult {
-  return getDb().prepare(sql).run(...params);
+  return getDb()
+    .prepare(sql)
+    .run(...params);
 }
 
 export function exec(sql: string): void {

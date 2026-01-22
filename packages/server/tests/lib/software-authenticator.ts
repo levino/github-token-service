@@ -30,11 +30,11 @@ export function createSoftwareAuthenticator() {
     // {1: 2, 3: -7, -1: 1, -2: x, -3: y}
     // key type = EC2 (2), alg = ES256 (-7), curve = P-256 (1)
     const coseKey = new Map<number, number | Uint8Array>();
-    coseKey.set(1, COSE_KEY_TYPE_EC2);  // kty: EC2
-    coseKey.set(3, COSE_ALG_ES256);     // alg: ES256
-    coseKey.set(-1, COSE_CURVE_P256);   // crv: P-256
-    coseKey.set(-2, x);                  // x coordinate
-    coseKey.set(-3, y);                  // y coordinate
+    coseKey.set(1, COSE_KEY_TYPE_EC2); // kty: EC2
+    coseKey.set(3, COSE_ALG_ES256); // alg: ES256
+    coseKey.set(-1, COSE_CURVE_P256); // crv: P-256
+    coseKey.set(-2, x); // x coordinate
+    coseKey.set(-3, y); // y coordinate
 
     return encodeCoseKey(coseKey);
   }
@@ -115,9 +115,11 @@ export function createSoftwareAuthenticator() {
 
   return {
     // Create a new credential (like YubiKey would during registration)
-    createCredential: async (rpId: string): Promise<{
+    createCredential: async (
+      rpId: string
+    ): Promise<{
       credentialId: string;
-      publicKey: string;  // COSE format, base64
+      publicKey: string; // COSE format, base64
       privateKey: string; // JWK format, base64 (for signing in tests)
     }> => {
       // Generate ECDSA P-256 key pair
@@ -201,11 +203,7 @@ export function createSoftwareAuthenticator() {
 
       // Sign with private key (returns IEEE P1363 format for P-256)
       const signatureP1363 = new Uint8Array(
-        await crypto.subtle.sign(
-          { name: 'ECDSA', hash: 'SHA-256' },
-          keyPair.privateKey,
-          signData
-        )
+        await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keyPair.privateKey, signData)
       );
 
       // Convert P1363 to DER format (WebAuthn expects DER)

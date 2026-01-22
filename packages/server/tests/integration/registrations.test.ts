@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
 import request from 'supertest';
+import { describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.ts';
-import { run } from '../../src/lib/db.ts';
 import { generateId, hashToken } from '../../src/lib/crypto.ts';
+import { run } from '../../src/lib/db.ts';
 
 describe('Registrations', () => {
   const app = createApp();
@@ -39,9 +39,7 @@ describe('Registrations', () => {
     });
 
     it('should require authentication', async () => {
-      await request(app)
-        .get('/api/registrations')
-        .expect(401);
+      await request(app).get('/api/registrations').expect(401);
     });
   });
 
@@ -59,10 +57,7 @@ describe('Registrations', () => {
     });
 
     it('should return 404 for unknown id', async () => {
-      await request(app)
-        .get('/api/registrations/unknown-id')
-        .set('X-Dev-Auth', '1')
-        .expect(404);
+      await request(app).get('/api/registrations/unknown-id').set('X-Dev-Auth', '1').expect(404);
     });
   });
 
@@ -70,10 +65,7 @@ describe('Registrations', () => {
     it('should revoke a registration', async () => {
       const { id } = createTestRegistration('test-devpod', ['org/repo-a']);
 
-      await request(app)
-        .delete(`/api/registrations/${id}`)
-        .set('X-Dev-Auth', '1')
-        .expect(200);
+      await request(app).delete(`/api/registrations/${id}`).set('X-Dev-Auth', '1').expect(200);
 
       // Check it's revoked
       const response = await request(app)

@@ -13,10 +13,11 @@
     "db:rollback": "node --experimental-strip-types scripts/rollback.ts"
   },
   "dependencies": {
-    "express": "^4.21.0",
-    "better-sqlite3": "^11.5.0",
+    "@levino/github-token-admin-ui": "*",
     "@simplewebauthn/server": "^11.0.0",
-    "cookie-parser": "^1.4.7"
+    "better-sqlite3": "^11.5.0",
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

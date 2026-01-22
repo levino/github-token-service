@@ -1,5 +1,5 @@
+import type { NextFunction, Request, Response } from 'express';
 import { Router } from 'express';
-import type { Request, Response, NextFunction } from 'express';
 import { config } from '../config.ts';
 import { query, queryOne, run } from '../lib/db.ts';
 import { isValidSession } from '../services/sessions.ts';
@@ -35,9 +35,7 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
 
 // GET /api/registrations - List all registrations
 registrationsRouter.get('/', requireAuth, (_req, res) => {
-  const registrations = query<Registration>(
-    'SELECT * FROM registrations ORDER BY created_at DESC'
-  );
+  const registrations = query<Registration>('SELECT * FROM registrations ORDER BY created_at DESC');
 
   res.json(
     registrations.map((r) => ({
@@ -55,10 +53,9 @@ registrationsRouter.get('/', requireAuth, (_req, res) => {
 
 // GET /api/registrations/:id - Get single registration
 registrationsRouter.get('/:id', requireAuth, (req, res) => {
-  const registration = queryOne<Registration>(
-    'SELECT * FROM registrations WHERE id = ?',
-    [req.params.id]
-  );
+  const registration = queryOne<Registration>('SELECT * FROM registrations WHERE id = ?', [
+    req.params.id,
+  ]);
 
   if (!registration) {
     res.status(404).json({ error: 'Not found' });
@@ -79,10 +76,9 @@ registrationsRouter.get('/:id', requireAuth, (req, res) => {
 
 // DELETE /api/registrations/:id - Revoke registration
 registrationsRouter.delete('/:id', requireAuth, (req, res) => {
-  const registration = queryOne<Registration>(
-    'SELECT * FROM registrations WHERE id = ?',
-    [req.params.id]
-  );
+  const registration = queryOne<Registration>('SELECT * FROM registrations WHERE id = ?', [
+    req.params.id,
+  ]);
 
   if (!registration) {
     res.status(404).json({ error: 'Not found' });

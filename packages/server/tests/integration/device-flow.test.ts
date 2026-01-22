@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
+import { describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.ts';
 
 describe('Device Authorization Flow', () => {

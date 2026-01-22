@@ -12,8 +12,8 @@ function parseOptions(): CreatePasskeyOptions {
     options: {
       'rp-id': { type: 'string' },
       'rp-name': { type: 'string', default: 'GitHub Token Service' },
-      'software': { type: 'boolean', default: false },
-      'help': { type: 'boolean', short: 'h', default: false },
+      software: { type: 'boolean', default: false },
+      help: { type: 'boolean', short: 'h', default: false },
     },
   });
 
@@ -78,7 +78,7 @@ async function createWithHardwareAuthenticator(options: CreatePasskeyOptions): P
 
   try {
     // Dynamic import to avoid loading heavy deps for software mode
-    const { generateRegistrationOptions, verifyRegistrationResponse } = await import('@simplewebauthn/server');
+    const { generateRegistrationOptions } = await import('@simplewebauthn/server');
 
     // Generate registration options
     const registrationOptions = await generateRegistrationOptions({

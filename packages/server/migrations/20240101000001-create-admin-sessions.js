@@ -1,5 +1,5 @@
-exports.up = function(db) {
-  return db.runSql(`
+exports.up = (db) =>
+  db.runSql(`
     CREATE TABLE admin_sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id TEXT UNIQUE NOT NULL,
@@ -7,8 +7,5 @@ exports.up = function(db) {
       expires_at TEXT NOT NULL
     )
   `);
-};
 
-exports.down = function(db) {
-  return db.runSql('DROP TABLE admin_sessions');
-};
+exports.down = (db) => db.runSql('DROP TABLE admin_sessions');

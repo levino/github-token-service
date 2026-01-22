@@ -5,8 +5,8 @@ import { getRegistrationToken, getStoredDevpodInfo } from '../lib/storage.ts';
 function parseOptions(): { format: 'text' | 'json' | 'export' } {
   const { values } = parseArgs({
     options: {
-      'format': { type: 'string', default: 'text' },
-      'help': { type: 'boolean', short: 'h', default: false },
+      format: { type: 'string', default: 'text' },
+      help: { type: 'boolean', short: 'h', default: false },
     },
   });
 
@@ -50,20 +50,24 @@ export async function getToken(): Promise<void> {
 
   switch (format) {
     case 'json':
-      console.log(JSON.stringify({
-        token: tokenResponse.token,
-        expires_at: tokenResponse.expires_at,
-        repos: tokenResponse.repos,
-        devpod: devpodInfo?.name,
-      }, null, 2));
+      console.log(
+        JSON.stringify(
+          {
+            token: tokenResponse.token,
+            expires_at: tokenResponse.expires_at,
+            repos: tokenResponse.repos,
+            devpod: devpodInfo?.name,
+          },
+          null,
+          2
+        )
+      );
       break;
 
     case 'export':
       console.log(`export GH_TOKEN=${tokenResponse.token}`);
       console.log(`export GITHUB_TOKEN=${tokenResponse.token}`);
       break;
-
-    case 'text':
     default:
       console.log(`Token: ${tokenResponse.token}`);
       console.log(`Expires: ${tokenResponse.expires_at}`);

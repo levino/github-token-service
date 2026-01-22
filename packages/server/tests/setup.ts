@@ -1,7 +1,7 @@
-import { beforeAll, afterAll, beforeEach } from 'vitest';
-import { getDb, closeDb } from '../src/lib/db.ts';
-import { mkdirSync, existsSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { afterAll, beforeAll, beforeEach } from 'vitest';
+import { closeDb, getDb } from '../src/lib/db.ts';
 
 // Environment variables are set in vitest.config.ts to ensure they're available
 // before any modules are loaded
@@ -57,7 +57,9 @@ beforeAll(async () => {
     )
   `);
 
-  db.exec('CREATE INDEX IF NOT EXISTS idx_registrations_token_hash ON registrations(registration_token_hash)');
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_registrations_token_hash ON registrations(registration_token_hash)'
+  );
 });
 
 beforeEach(() => {

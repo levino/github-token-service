@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { queryOne, run } from '../lib/db.ts';
 import { hashToken } from '../lib/crypto.ts';
+import { queryOne, run } from '../lib/db.ts';
 import { createInstallationToken } from '../services/github.ts';
 
 export const tokenRouter = Router();

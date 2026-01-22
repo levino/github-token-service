@@ -1,5 +1,5 @@
-import { run, queryOne } from '../lib/db.ts';
 import { generateId } from '../lib/crypto.ts';
+import { queryOne, run } from '../lib/db.ts';
 
 interface Session {
   id: number;
@@ -15,10 +15,11 @@ export function createSession(): string {
   const now = new Date().toISOString();
   const expiresAt = new Date(Date.now() + SESSION_DURATION_MS).toISOString();
 
-  run(
-    'INSERT INTO admin_sessions (session_id, created_at, expires_at) VALUES (?, ?, ?)',
-    [sessionId, now, expiresAt]
-  );
+  run('INSERT INTO admin_sessions (session_id, created_at, expires_at) VALUES (?, ?, ?)', [
+    sessionId,
+    now,
+    expiresAt,
+  ]);
 
   return sessionId;
 }

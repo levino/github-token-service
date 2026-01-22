@@ -12,3 +12,5 @@ data/
 # Build artifacts
 dist/
 *.tsbuildinfo
+packages/admin-ui/.astro/
+packages/admin-ui/dist/

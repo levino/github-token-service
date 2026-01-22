@@ -1,5 +1,4 @@
-import { parseArgs } from 'node:util';
-import { loadConfig, setServiceUrl, saveConfig } from '../lib/storage.ts';
+import { loadConfig, saveConfig, setServiceUrl } from '../lib/storage.ts';
 
 function printHelp(): void {
   console.log(`
