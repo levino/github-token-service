@@ -4,6 +4,21 @@
 
 Generate scoped GitHub App installation tokens for devpods without exposing the GitHub App private key. Devpods can only obtain tokens for repositories they were explicitly registered for. Registration requires admin approval through a web interface secured with passkey authentication.
 
+## Monorepo Structure
+
+| Package | Purpose | Published |
+|---------|---------|-----------|
+| `@levino/github-token-service` | Express server with WebAuthn login and admin dashboard | No (deployed via Docker) |
+| `@levino/github-token-cli` | CLI for devpods to register and request tokens | Yes (npm) |
+| `@levino/github-token-admin` | CLI to create passkey on YubiKey (initial setup) | No (runs locally) |
+
+### Why CLI for Passkey Creation?
+
+- **No open registration state**: Server never accepts new passkey registrations via web
+- **More secure**: Admin CLI runs locally where the YubiKey is physically present
+- **Simpler server**: Only needs to verify passkeys, not register them
+- **No database connection needed**: CLI outputs credential as string → add as env var to service
+
 ## Definitions
 
 | Term | Description |
@@ -39,9 +54,33 @@ Generate scoped GitHub App installation tokens for devpods without exposing the 
 
 | Path | Description |
 |------|-------------|
-| GET `/` | Login page (passkey authentication) |
+| GET `/` | Login page (passkey authentication only, no registration) |
 | GET `/dashboard` | List of registered devpods with stats |
 | GET `/device` | Device authorization page (enter user_code) |
+
+## Admin Setup Flow
+
+Initial setup using the admin CLI (runs on local machine with YubiKey).
+
+```mermaid
+sequenceDiagram
+    participant Admin as Admin (local machine)
+    participant CLI as github-token-admin
+    participant YubiKey as YubiKey
+    participant Coolify as Coolify Dashboard
+
+    Admin->>CLI: github-token-admin create-passkey --rp-id token.example.com
+    CLI->>CLI: Generate WebAuthn challenge
+    CLI->>YubiKey: Request credential creation
+    YubiKey->>Admin: Touch to confirm
+    Admin->>YubiKey: Touch
+    YubiKey-->>CLI: Credential (id + public key)
+    CLI-->>Admin: Output: ADMIN_CREDENTIAL=eyJpZCI6Ii4uLiIs...
+    Admin->>Coolify: Add ADMIN_CREDENTIAL env var
+    Coolify->>Coolify: Redeploy service
+```
+
+The admin CLI outputs the credential as a base64-encoded JSON string. Add this as `ADMIN_CREDENTIAL` environment variable in Coolify. The server reads it at startup.
 
 ## Device Authorization Flow (Registration)
 
@@ -94,6 +133,86 @@ sequenceDiagram
     Service-->>CLI: {token, expires_at, repos}
 ```
 
+## CLI Usage
+
+### Devpod CLI (`@levino/github-token-cli`)
+
+```bash
+# Install globally in devpod
+npm install -g @levino/github-token-cli
+
+# Register devpod (interactive - shows code to enter in browser)
+github-token register --name my-devpod --repos org/repo-a,org/repo-b
+
+# Get GitHub token (after registration)
+github-token get-token
+
+# Configure service URL
+github-token config set service-url https://token-service.example.com
+```
+
+### Admin CLI (`@levino/github-token-admin`)
+
+```bash
+# Production: Use real YubiKey
+npx @levino/github-token-admin create-passkey \
+  --rp-id token-service.example.com \
+  --rp-name "GitHub Token Service"
+
+# Development: Use software authenticator (no hardware needed)
+npx @levino/github-token-admin create-passkey \
+  --rp-id localhost \
+  --rp-name "GitHub Token Service (Dev)" \
+  --software
+
+# Output:
+# Touch your YubiKey to create passkey...  (or: Using software authenticator)
+#
+# Success! Add this environment variable to your service:
+#
+# ADMIN_CREDENTIAL=eyJpZCI6IjRhYjNjZDEyLi4uIiwicHVibGljS2V5IjoiTUZrd0V3WUhLb1pJemow...
+#
+# Then redeploy the service.
+```
+
+The credential string is a base64-encoded JSON containing:
+```json
+{
+  "credentialId": "base64...",
+  "publicKey": "base64... (COSE format)"
+}
+```
+
+The private key **never leaves the YubiKey**. During login:
+1. Server sends challenge + credential ID to browser
+2. Browser asks YubiKey to sign the challenge
+3. YubiKey signs internally, returns signature
+4. Server verifies signature using stored public key
+
+### Development Without YubiKey
+
+**Option 1: Chrome Virtual Authenticator (recommended)**
+1. Open Chrome DevTools → More tools → WebAuthn
+2. Enable virtual authenticator
+3. Use the admin CLI to see what credential ID/public key are generated
+4. Chrome's virtual authenticator handles the signing
+
+**Option 2: Dev bypass (for quick local testing)**
+```bash
+# Server accepts dev token when NODE_ENV=development
+curl -H "X-Dev-Auth: 1" http://localhost:3000/api/...
+```
+
+### Integration Tests
+
+For automated tests, we use a SoftwareAuthenticator class that:
+1. Generates ECDSA P-256 key pairs
+2. Creates valid attestation responses (registration)
+3. Signs challenges with the private key (authentication)
+4. Works entirely in Node.js - no browser needed
+
+The software authenticator holds its own private keys in memory (unlike production where keys stay on YubiKey).
+
 ## Admin Dashboard Features
 
 - Devpod name
@@ -108,11 +227,12 @@ sequenceDiagram
 
 1. GitHub App private key never leaves Token Service
 2. Admin authentication requires physical presence (passkey/YubiKey)
-3. Device code prevents authorization hijacking
-4. Devpod compromise only exposes pre-registered repositories
-5. Registration tokens can be revoked via dashboard
-6. Installation tokens are short-lived (1 hour)
-7. No secrets transmitted to devpod during registration
+3. **No open registration state** - passkeys created via CLI only, server never accepts new registrations
+4. Device code prevents authorization hijacking
+5. Devpod compromise only exposes pre-registered repositories
+6. Registration tokens can be revoked via dashboard
+7. Installation tokens are short-lived (1 hour)
+8. No secrets transmitted to devpod during registration
 
 ## Data Structures
 
@@ -137,10 +257,10 @@ interface Registration {
   token_request_count: number;
 }
 
+// Loaded from ADMIN_CREDENTIAL env var (not in database)
 interface AdminCredential {
-  credential_id: string;      // WebAuthn credential ID
-  public_key: string;         // WebAuthn public key
-  created_at: Date;
+  credentialId: string;       // WebAuthn credential ID (base64)
+  publicKey: string;          // WebAuthn public key (COSE format, base64)
 }
 
 interface AdminSession {
@@ -158,143 +278,87 @@ interface AdminSession {
 - **db-migrate** + **db-migrate-sqlite3**: Schema migrations
 - **Plain SQL**: No ORM, direct parameterized queries
 
-### Migration Structure
-
-```
-migrations/
-  20240101120000-create-admin-credentials.js
-  20240101120001-create-admin-sessions.js
-  20240101120002-create-pending-authorizations.js
-  20240101120003-create-registrations.js
-```
-
-### database.json (db-migrate config)
-
-```json
-{
-  "dev": {
-    "driver": "sqlite3",
-    "filename": { "ENV": "DATABASE_PATH" }
-  },
-  "test": {
-    "driver": "sqlite3",
-    "filename": ":memory:"
-  },
-  "prod": {
-    "driver": "sqlite3",
-    "filename": { "ENV": "DATABASE_PATH" }
-  }
-}
-```
-
-### Example Migration
-
-```javascript
-// migrations/20240101120000-create-admin-credentials.js
-exports.up = function(db) {
-  return db.runSql(`
-    CREATE TABLE admin_credentials (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      credential_id TEXT UNIQUE NOT NULL,
-      public_key TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-};
-
-exports.down = function(db) {
-  return db.runSql('DROP TABLE admin_credentials');
-};
-```
-
 ### Schema Overview
 
 | Table | Purpose |
 |-------|---------|
-| admin_credentials | WebAuthn credential IDs and public keys |
 | admin_sessions | Active login sessions |
 | pending_authorizations | Device auth requests awaiting approval |
 | registrations | Approved devpods with their allowed repos |
 
-### Query Pattern
-
-```typescript
-// src/lib/db.ts
-import Database from 'better-sqlite3';
-
-const db = new Database(process.env.DATABASE_PATH);
-
-// Parameterized queries - safe from SQL injection
-export function getRegistration(id: string): Registration | undefined {
-  return db.prepare('SELECT * FROM registrations WHERE id = ?').get(id);
-}
-
-export function createRegistration(reg: Registration): void {
-  db.prepare(`
-    INSERT INTO registrations (id, devpod_name, registration_token_hash, allowed_repos, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(reg.id, reg.devpod_name, reg.registration_token_hash, JSON.stringify(reg.allowed_repos), reg.created_at);
-}
-```
+Note: Admin credentials are stored as `ADMIN_CREDENTIAL` env var, not in database.
 
 ## Project Structure
 
 ```
-src/
-  index.ts                 # Entry point
-  app.ts                   # Express app setup
-  routes/
-    api.ts                 # API routes
-    web.ts                 # Web UI routes
-  services/
-    auth.ts                # WebAuthn service
-    device.ts              # Device authorization
-    github.ts              # GitHub API integration
-    registration.ts        # Registration management
-  lib/
-    db.ts                  # Database client (better-sqlite3)
-    crypto.ts              # Crypto utilities
-migrations/                # db-migrate SQL migrations
-  20240101120000-create-admin-credentials.js
-  20240101120001-create-admin-sessions.js
-  20240101120002-create-pending-authorizations.js
-  20240101120003-create-registrations.js
-database.json              # db-migrate config
-public/                    # Static assets
-tests/
-  setup.ts                 # Test setup (migrations, auth helpers)
-  lib/
-    authenticator.ts       # Software FIDO authenticator
-  integration/
-    auth.integration.test.ts
-    device.integration.test.ts
-    registration.integration.test.ts
-    token.integration.test.ts
+/
+├── packages/
+│   ├── server/                    # @levino/github-token-service
+│   │   ├── src/
+│   │   │   ├── index.ts
+│   │   │   ├── app.ts
+│   │   │   ├── routes/
+│   │   │   ├── services/
+│   │   │   └── lib/
+│   │   ├── migrations/
+│   │   ├── public/
+│   │   ├── tests/
+│   │   ├── database.json
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   │
+│   ├── cli/                       # @levino/github-token-cli
+│   │   ├── src/
+│   │   │   ├── index.ts           # CLI entry point
+│   │   │   ├── commands/
+│   │   │   │   ├── register.ts
+│   │   │   │   ├── get-token.ts
+│   │   │   │   └── config.ts
+│   │   │   └── lib/
+│   │   │       ├── api.ts         # HTTP client for service
+│   │   │       └── storage.ts     # Local token storage
+│   │   ├── tests/
+│   │   └── package.json
+│   │
+│   └── admin/                     # @levino/github-token-admin
+│       ├── src/
+│       │   ├── index.ts           # CLI entry point
+│       │   ├── commands/
+│       │   │   └── create-passkey.ts
+│       │   └── lib/
+│       │       └── webauthn.ts    # WebAuthn credential creation
+│       ├── tests/
+│       └── package.json
+│
+├── docker-compose.dev.yaml
+├── docker-compose.test.yaml
+├── docker-compose.coolify.yaml
+├── package.json                   # Workspace root
+└── tsconfig.json                  # Shared TypeScript config
 ```
 
 ## Docker Configuration
 
 ### docker-compose.dev.yaml
 
-Development environment with hot reload. SQLite data in Docker volume (not host).
-
 ```yaml
 services:
-  app:
+  server:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: packages/server/Dockerfile
       target: development
     ports:
       - "3000:3000"
     volumes:
-      - .:/app
-      - node_modules:/app/node_modules
+      - ./packages/server:/app/packages/server
+      - server_node_modules:/app/packages/server/node_modules
       - dev_data:/data
     environment:
       - NODE_ENV=development
       - DATABASE_PATH=/data/token-service.db
       - PORT=3000
+      - ADMIN_CREDENTIAL=${ADMIN_CREDENTIAL}
       - GITHUB_APP_ID=${GITHUB_APP_ID}
       - GITHUB_APP_PRIVATE_KEY=${GITHUB_APP_PRIVATE_KEY}
       - GITHUB_INSTALLATION_ID=${GITHUB_INSTALLATION_ID}
@@ -304,24 +368,22 @@ services:
     command: npm run dev
 
 volumes:
-  node_modules:
+  server_node_modules:
   dev_data:
 ```
 
 ### docker-compose.test.yaml
 
-Integration tests with database reset between runs.
-
 ```yaml
 services:
-  app:
+  server:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: packages/server/Dockerfile
       target: development
     volumes:
-      - .:/app
-      - node_modules_test:/app/node_modules
+      - ./packages/server:/app/packages/server
+      - test_node_modules:/app/packages/server/node_modules
       - test_data:/data
     environment:
       - NODE_ENV=test
@@ -344,31 +406,28 @@ services:
     working_dir: /app
     volumes:
       - .:/app
-      - node_modules_test:/app/node_modules
+      - test_node_modules:/app/packages/server/node_modules
     environment:
       - NODE_ENV=test
-      - API_URL=http://app:3000
-      - DATABASE_PATH=/data/token-service.db
+      - API_URL=http://server:3000
     depends_on:
-      app:
+      server:
         condition: service_healthy
-    command: npm test
+    command: npm test --workspace=packages/server
 
 volumes:
-  node_modules_test:
+  test_node_modules:
   test_data:
 ```
 
 ### docker-compose.coolify.yaml
 
-Production deployment on Coolify with persistent volume.
-
 ```yaml
 services:
-  app:
+  server:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: packages/server/Dockerfile
       target: production
     ports:
       - "3000:3000"
@@ -378,6 +437,7 @@ services:
       - NODE_ENV=production
       - DATABASE_PATH=/data/token-service.db
       - PORT=3000
+      - ADMIN_CREDENTIAL=${ADMIN_CREDENTIAL}
       - GITHUB_APP_ID=${GITHUB_APP_ID}
       - GITHUB_APP_PRIVATE_KEY=${GITHUB_APP_PRIVATE_KEY}
       - GITHUB_INSTALLATION_ID=${GITHUB_INSTALLATION_ID}
@@ -392,33 +452,6 @@ services:
 
 volumes:
   app_data:
-```
-
-### Dockerfile
-
-```dockerfile
-FROM node:22-alpine AS base
-WORKDIR /app
-
-FROM base AS development
-COPY package*.json ./
-RUN npm install
-COPY . .
-CMD ["npm", "run", "dev"]
-
-FROM base AS builder
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run typecheck
-
-FROM base AS production
-COPY package*.json ./
-RUN npm ci --omit=dev
-COPY --from=builder /app/src ./src
-COPY --from=builder /app/public ./public
-USER node
-CMD ["npm", "start"]
 ```
 
 ## Testing Strategy
@@ -437,98 +470,109 @@ CMD ["npm", "start"]
 - @simplewebauthn/server (WebAuthn implementation)
 - Custom SoftwareAuthenticator class (FIDO testing without hardware)
 
-### WebAuthn Testing
-
-Software authenticator that implements WebAuthn protocol:
-1. Generates real ECDSA P-256 key pairs
-2. Creates valid attestation responses
-3. Signs authentication challenges
-4. No mocking of crypto operations
-
 ### Test Setup Pattern
 
 Uses db-migrate programmatically to run migrations up before tests and down after.
 
 ```typescript
-// tests/setup.ts
+// packages/server/tests/setup.ts
 import DBMigrate from 'db-migrate';
 import { beforeAll, afterAll, beforeEach } from 'vitest';
 
 const dbmigrate = DBMigrate.getInstance(true, { env: 'test' });
 
 beforeAll(async () => {
-  await dbmigrate.up();  // Run all migrations
+  await dbmigrate.up();
 });
 
 afterAll(async () => {
-  await dbmigrate.reset();  // Roll back all migrations
+  await dbmigrate.reset();
 });
 
 beforeEach(async () => {
-  // Clear data between tests (tables exist, just empty them)
   db.exec(`
     DELETE FROM registrations;
     DELETE FROM pending_authorizations;
     DELETE FROM admin_sessions;
-    DELETE FROM admin_credentials;
   `);
-});
-
-// Helper creates real authenticated session via WebAuthn
-export async function createAuthenticatedSession(): Promise<string> {
-  // Full WebAuthn registration + authentication flow
-  // Returns session cookie
-}
-```
-
-### Running Tests
-
-```bash
-npm run docker:test              # Run all tests in Docker
-npm run docker:reset-test-db     # Reset test database
-```
-
-### vitest.config.ts
-
-```typescript
-import { defineConfig } from 'vitest/config';
-
-export default defineConfig({
-  test: {
-    include: ['tests/**/*.integration.test.ts'],
-    globals: true,
-    setupFiles: ['tests/setup.ts'],
-    fileParallelism: false,
-    testTimeout: 10000,
-    hookTimeout: 10000,
-  },
 });
 ```
 
 ## Package Scripts
 
+### Root package.json
+
 ```json
 {
+  "name": "github-token-service",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "dev": "npm run dev --workspace=packages/server",
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "typecheck": "tsc --build",
+    "docker:dev": "docker compose -f docker-compose.dev.yaml up",
+    "docker:test": "docker compose -f docker-compose.test.yaml run --rm runner"
+  }
+}
+```
+
+### packages/server/package.json
+
+```json
+{
+  "name": "@levino/github-token-service",
   "scripts": {
     "start": "node --experimental-strip-types src/index.ts",
     "dev": "node --experimental-strip-types --watch src/index.ts",
-    "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest",
     "db:migrate": "db-migrate up",
     "db:rollback": "db-migrate down",
-    "db:reset": "db-migrate reset && db-migrate up",
-    "db:create": "db-migrate create",
-    "docker:dev": "docker compose -f docker-compose.dev.yaml up",
-    "docker:test": "docker compose -f docker-compose.test.yaml run --rm runner",
-    "docker:reset-test-db": "docker compose -f docker-compose.test.yaml down -v && docker compose -f docker-compose.test.yaml up -d app"
+    "db:reset": "db-migrate reset && db-migrate up"
+  }
+}
+```
+
+### packages/cli/package.json
+
+```json
+{
+  "name": "@levino/github-token-cli",
+  "bin": {
+    "github-token": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  }
+}
+```
+
+### packages/admin/package.json
+
+```json
+{
+  "name": "@levino/github-token-admin",
+  "bin": {
+    "github-token-admin": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
   }
 }
 ```
 
 ## Implementation Phases
 
-### Phase 1: Core Infrastructure
+### Phase 1: Monorepo Setup
+- Initialize npm workspaces
+- Shared TypeScript config
+- Root package.json with workspace scripts
+- Basic package structure for all 3 packages
+
+### Phase 2: Server Core
 - Express server with TypeScript (--strip-types)
 - better-sqlite3 database client
 - db-migrate setup with initial migrations
@@ -536,42 +580,51 @@ export default defineConfig({
 - Docker Compose for development
 - Health check endpoint
 
-### Phase 2: WebAuthn Authentication
-- WebAuthn registration flow (initial admin setup)
-- WebAuthn authentication flow (login)
+### Phase 3: Admin CLI
+- WebAuthn credential creation with YubiKey
+- Output credential as base64 JSON string
+- `create-passkey` command (outputs ADMIN_CREDENTIAL value)
+- Support for Chrome virtual authenticator in dev
+- Integration tests with software authenticator
+
+### Phase 4: Server Authentication
+- WebAuthn authentication flow (login only, no registration)
 - Session management (secure cookies)
 - Auth middleware for protected routes
-- Software authenticator for testing
 - Auth integration tests
 
-### Phase 3: Device Authorization Flow
+### Phase 5: Device Authorization Flow
 - `POST /api/device/code` endpoint
-- Secure device_code + user-friendly user_code generation
 - `POST /api/device/poll` with RFC 8628 responses
-- `GET /api/device/pending/:code` for admin lookup
 - `POST /api/device/authorize` for approve/deny
-- Registration token generation and hashing
+- Registration token generation
 - Device flow integration tests
 
-### Phase 4: Token Generation
+### Phase 6: Devpod CLI
+- `register` command with device flow
+- `get-token` command
+- `config` command for service URL
+- Local storage for registration token
+- Integration tests against real server
+
+### Phase 7: Token Generation
 - GitHub App JWT generation
 - Installation token request to GitHub API
 - Repository scoping
 - `POST /api/token` endpoint
-- Registration token verification
 - Usage statistics update
-- Token generation integration tests
 
-### Phase 5: Admin Dashboard
+### Phase 8: Admin Dashboard
 - Static file serving for web UI
 - Login page with WebAuthn
 - Dashboard listing registrations with stats
 - Device authorization page
 - Revocation with confirmation
 
-### Phase 6: Production Readiness
+### Phase 9: Production Readiness
 - Production Dockerfile
 - docker-compose.coolify.yaml
+- Publish CLI to npm
 - Request logging
 - Rate limiting
 - Deployment documentation
@@ -580,10 +633,12 @@ export default defineConfig({
 
 | Decision | Rationale |
 |----------|-----------|
-| WebAuthn/Passkeys | Phishing-resistant, works with YubiKey, no passwords, requires physical presence |
-| Device Authorization Flow (RFC 8628) | Works for CLI apps, familiar pattern (GitHub/Google), clear authorization confirmation |
-| SQLite + better-sqlite3 | Zero config, single file, sync API (no async overhead), fast |
-| Plain SQL (no ORM) | Direct control, no abstraction leaks, easier to debug and optimize |
-| db-migrate | Framework-agnostic migrations, programmatic API for test setup, supports up/down |
-| Supertest + Real Database | Tests actual behavior, catches integration issues, fast with SQLite |
-| Software Authenticator | Full WebAuthn testing without hardware, no mocking of security code |
+| Monorepo with npm workspaces | Shared types, atomic changes, single test run |
+| CLI for passkey creation | No open registration state, more secure, simpler server |
+| WebAuthn/Passkeys | Phishing-resistant, works with YubiKey, no passwords |
+| Device Authorization Flow (RFC 8628) | Works for CLI apps, familiar pattern (GitHub/Google) |
+| SQLite + better-sqlite3 | Zero config, single file, sync API, fast |
+| Plain SQL (no ORM) | Direct control, no abstraction leaks |
+| db-migrate | Framework-agnostic migrations, programmatic API for tests |
+| Supertest + Real Database | Tests actual behavior, catches integration issues |
+| Software Authenticator | Full WebAuthn testing without hardware |
