@@ -6,223 +6,151 @@ Generate scoped GitHub App installation tokens for devpods without exposing the 
 
 ## Definitions
 
-- **Token Service**: Web service with API and admin UI, running on dev server
-- **Devpod**: Containerized development environment that needs GitHub API access
-- **Admin**: Human developer who approves registrations via web UI (authenticated with passkey/YubiKey)
-- **Device Code**: Short code (e.g., "ABCD-1234") displayed on both CLI and web UI to link the authorization
-- **Registration Token**: Long-lived token issued to devpod after approval, used to request GitHub tokens
-- **Installation Token**: GitHub App token scoped to specific repositories, expires after 1 hour
+| Term | Description |
+|------|-------------|
+| Token Service | Web service with API and admin UI, running on dev server |
+| Devpod | Containerized development environment that needs GitHub API access |
+| Admin | Human developer who approves registrations via web UI (authenticated with passkey/YubiKey) |
+| Device Code | Short code (e.g., "ABCD-1234") displayed on both CLI and web UI to link the authorization |
+| Registration Token | Long-lived token issued to devpod after approval, used to request GitHub tokens |
+| Installation Token | GitHub App token scoped to specific repositories, expires after 1 hour |
 
-## Components
+## API Endpoints
 
-### Token Service (Web Application)
+### Public API (for devpod CLI)
 
-Location: Docker container on dev server
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/device/code` | Start device authorization flow, returns device_code + user_code |
+| POST | `/api/device/poll` | Poll for authorization completion (returns registration token when approved) |
+| POST | `/api/token` | Exchange registration token for GitHub installation token |
 
-Stores:
-- GitHub App ID and private key
-- Admin passkey credentials (WebAuthn)
-- Registry of devpod registrations
-- Pending authorization requests
-- Usage statistics
+### Protected API (requires admin auth)
 
-#### API Endpoints (for devpod CLI)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/registrations` | List all registrations with stats |
+| GET | `/api/registrations/:id` | Get single registration details |
+| DELETE | `/api/registrations/:id` | Revoke a registration |
+| GET | `/api/device/pending/:code` | Look up pending authorization by user_code |
+| POST | `/api/device/authorize` | Approve or deny a device authorization |
 
-- `POST /api/device/code` — Start device authorization flow, returns device_code + user_code
-- `POST /api/device/poll` — Poll for authorization completion (returns registration token when approved)
-- `POST /api/token` — Exchange registration token for GitHub installation token
+### Web UI Routes
 
-#### Web UI Routes (for admin)
-
-- `GET /` — Login page (passkey authentication)
-- `GET /dashboard` — List of registered devpods with stats
-- `GET /device` — Device authorization page (enter user_code)
-- `POST /device/authorize` — Approve or deny a device authorization
-- `POST /registrations/:id/revoke` — Revoke a devpod registration
-
-#### Internal API (for web UI, requires auth)
-
-- `GET /api/registrations` — List all registrations with stats
-- `GET /api/registrations/:id` — Get single registration details
-- `DELETE /api/registrations/:id` — Revoke a registration
-- `GET /api/pending` — List pending authorizations
-
-### Devpod Client (CLI)
-
-Location: Inside each devpod container
-
-Stores:
-- Registration token (after first approval)
+| Path | Description |
+|------|-------------|
+| GET `/` | Login page (passkey authentication) |
+| GET `/dashboard` | List of registered devpods with stats |
+| GET `/device` | Device authorization page (enter user_code) |
 
 ## Device Authorization Flow (Registration)
 
-This follows the OAuth 2.0 Device Authorization Grant (RFC 8628) pattern, similar to GitHub CLI's `gh auth login`.
+Follows OAuth 2.0 Device Authorization Grant (RFC 8628), similar to `gh auth login`.
 
-```
-┌─────────────┐                              ┌───────────────┐                              ┌─────────┐
-│  Devpod CLI │                              │ Token Service │                              │  Admin  │
-└──────┬──────┘                              └───────┬───────┘                              └────┬────┘
-       │                                             │                                          │
-       │ 1. POST /api/device/code                    │                                          │
-       │    {devpod_name, repos}                     │                                          │
-       │────────────────────────────────────────────>│                                          │
-       │                                             │                                          │
-       │ 2. Returns {device_code, user_code,         │                                          │
-       │    verification_uri, expires_in}            │                                          │
-       │<────────────────────────────────────────────│                                          │
-       │                                             │                                          │
-       │ 3. Display to user:                         │                                          │
-       │    "Visit https://server/device             │                                          │
-       │     Enter code: ABCD-1234"                  │                                          │
-       │                                             │                                          │
-       │                                             │  4. Admin visits /device                 │
-       │                                             │<─────────────────────────────────────────│
-       │                                             │                                          │
-       │                                             │  5. Admin enters user_code: ABCD-1234    │
-       │                                             │<─────────────────────────────────────────│
-       │                                             │                                          │
-       │                                             │  6. Shows: "Authorize devpod 'my-dev'    │
-       │                                             │     for repos: org/repo-a, org/repo-b?"  │
-       │                                             │─────────────────────────────────────────>│
-       │                                             │                                          │
-       │                                             │  7. Admin clicks Approve                 │
-       │                                             │<─────────────────────────────────────────│
-       │                                             │                                          │
-       │ 8. Poll: POST /api/device/poll              │                                          │
-       │    {device_code}                            │                                          │
-       │────────────────────────────────────────────>│                                          │
-       │                                             │                                          │
-       │ 9. Returns {registration_token}             │                                          │
-       │<────────────────────────────────────────────│                                          │
-       │                                             │                                          │
-       │ 10. Store registration_token locally        │                                          │
-       │                                             │                                          │
+```mermaid
+sequenceDiagram
+    participant CLI as Devpod CLI
+    participant Service as Token Service
+    participant Admin as Admin Browser
+
+    CLI->>Service: POST /api/device/code {devpod_name, repos}
+    Service-->>CLI: {device_code, user_code, verification_uri, expires_in}
+
+    Note over CLI: Display "Visit https://server/device<br/>Enter code: ABCD-1234"
+
+    loop CLI polls every 5s
+        CLI->>Service: POST /api/device/poll {device_code}
+        Service-->>CLI: {error: "authorization_pending"}
+    end
+
+    Admin->>Service: Visit /device
+    Admin->>Service: Enter user_code: ABCD-1234
+    Service-->>Admin: Show "Authorize devpod 'my-dev' for repos: org/repo-a?"
+    Admin->>Service: Click Approve
+
+    CLI->>Service: POST /api/device/poll {device_code}
+    Service-->>CLI: {registration_token}
+
+    Note over CLI: Store registration_token locally
 ```
 
-### Why the User Code?
+### User Code Security
 
-The user code (e.g., "ABCD-1234") prevents authorization hijacking:
-- Without it, an attacker could start an auth flow on their machine and trick the admin into approving it
-- The admin verifies the code matches what the CLI displays, confirming they're approving the right device
-- This is the same pattern used by GitHub, Google, Microsoft for device authorization
+The user code (e.g., "ABCD-1234") prevents authorization hijacking. Without it, an attacker could start an auth flow and trick the admin into approving it. The admin verifies the code matches what the CLI displays. Same pattern used by GitHub, Google, Microsoft.
 
 ## Token Request Flow
 
-After registration, the devpod can request GitHub tokens autonomously:
+After registration, devpod requests GitHub tokens autonomously (no user interaction).
 
-```
-┌─────────────┐                              ┌───────────────┐                    ┌────────┐
-│  Devpod CLI │                              │ Token Service │                    │ GitHub │
-└──────┬──────┘                              └───────┬───────┘                    └───┬────┘
-       │                                             │                                │
-       │ 1. POST /api/token                          │                                │
-       │    Authorization: Bearer {registration_token}                                │
-       │────────────────────────────────────────────>│                                │
-       │                                             │                                │
-       │                                             │ 2. Generate JWT, request       │
-       │                                             │    installation token          │
-       │                                             │───────────────────────────────>│
-       │                                             │                                │
-       │                                             │ 3. Scoped installation token   │
-       │                                             │<───────────────────────────────│
-       │                                             │                                │
-       │ 4. Returns {token, expires_at, repos}       │                                │
-       │<────────────────────────────────────────────│                                │
-       │                                             │                                │
+```mermaid
+sequenceDiagram
+    participant CLI as Devpod CLI
+    participant Service as Token Service
+    participant GitHub as GitHub API
+
+    CLI->>Service: POST /api/token<br/>Authorization: Bearer {registration_token}
+    Service->>GitHub: Request installation token (JWT auth)
+    GitHub-->>Service: Scoped installation token
+    Service-->>CLI: {token, expires_at, repos}
 ```
 
-No user interaction required - the registration token authenticates the devpod.
+## Admin Dashboard Features
 
-## Admin Web UI
-
-### Login Page (`/`)
-
-- Passkey/WebAuthn authentication only (no passwords)
-- Initial setup flow to register first passkey
-- YubiKey or platform authenticator support
-
-### Dashboard (`/dashboard`)
-
-Shows list of registered devpods with:
-- **Devpod name** — Human-readable identifier
-- **Allowed repositories** — List of repos this devpod can access
-- **Created date** — When the registration was approved
-- **Last seen** — Last time a token was requested
-- **Token requests** — Total number of tokens issued
-- **Status** — Active or revoked
-- **Actions** — Revoke button with confirmation
-
-### Device Authorization Page (`/device`)
-
-- Input field for user code
-- After entering valid code, shows:
-  - Devpod name requesting access
-  - List of repositories requested
-  - Approve / Deny buttons
+- Devpod name
+- Allowed repositories
+- Created date
+- Last seen (last token request)
+- Token request count
+- Status (active/revoked)
+- Revoke action with confirmation
 
 ## Security Properties
 
-1. **GitHub App private key never leaves Token Service**
-2. **Admin authentication requires physical presence** (passkey/YubiKey)
-3. **Device code prevents authorization hijacking** (admin verifies code matches CLI)
-4. **Devpod compromise only exposes pre-registered repositories**
-5. **Registration tokens can be revoked** via admin dashboard
-6. **Installation tokens are short-lived** (1 hour)
-7. **No secrets transmitted to devpod** during registration (just displays a code)
+1. GitHub App private key never leaves Token Service
+2. Admin authentication requires physical presence (passkey/YubiKey)
+3. Device code prevents authorization hijacking
+4. Devpod compromise only exposes pre-registered repositories
+5. Registration tokens can be revoked via dashboard
+6. Installation tokens are short-lived (1 hour)
+7. No secrets transmitted to devpod during registration
 
 ## Data Structures
-
-### Pending Device Authorization
 
 ```typescript
 interface PendingAuthorization {
   device_code: string;        // Secret, used by CLI to poll
   user_code: string;          // Short code shown to user (e.g., "ABCD-1234")
-  devpod_name: string;        // Human-readable name for the devpod
-  requested_repos: string[];  // Repositories being requested
-  expires_at: Date;           // Authorization expires if not completed
+  devpod_name: string;
+  requested_repos: string[];
+  expires_at: Date;
   status: 'pending' | 'approved' | 'denied';
 }
-```
 
-### Registration Entry
-
-```typescript
 interface Registration {
-  id: string;                       // Unique identifier
-  devpod_name: string;              // Human-readable name
-  registration_token_hash: string;  // Hashed token for verification
-  allowed_repos: string[];          // Repositories this devpod can access
+  id: string;
+  devpod_name: string;
+  registration_token_hash: string;
+  allowed_repos: string[];
   created_at: Date;
-  revoked_at: Date | null;          // Null if active
-  last_token_request: Date | null;  // Last time a token was issued
-  token_request_count: number;      // Total tokens issued
+  revoked_at: Date | null;
+  last_token_request: Date | null;
+  token_request_count: number;
 }
-```
 
-### Admin Credential (WebAuthn)
-
-```typescript
 interface AdminCredential {
   credential_id: string;      // WebAuthn credential ID
   public_key: string;         // WebAuthn public key
   created_at: Date;
 }
-```
 
-### Admin Session
-
-```typescript
 interface AdminSession {
-  session_id: string;         // Secure random token
+  session_id: string;
   created_at: Date;
   expires_at: Date;
 }
 ```
 
-## Database
-
-### SQLite Schema
+## Database Schema (SQLite)
 
 ```sql
 CREATE TABLE admin_credentials (
@@ -266,54 +194,41 @@ CREATE INDEX idx_pending_status ON pending_authorizations(status);
 CREATE INDEX idx_registrations_active ON registrations(revoked_at) WHERE revoked_at IS NULL;
 ```
 
-### Storage Location
+## Project Structure
 
-- **Development**: SQLite file in Docker volume, isolated from host
-- **Testing**: SQLite file in Docker volume, reset between test runs
-- **Production (Coolify)**: SQLite file in persistent Docker volume (`/data/token-service.db`)
+```
+src/
+  index.ts                 # Entry point
+  app.ts                   # Express app setup
+  db.ts                    # Database initialization
+  routes/
+    api.ts                 # API routes
+    web.ts                 # Web UI routes
+  services/
+    auth.ts                # WebAuthn service
+    device.ts              # Device authorization
+    github.ts              # GitHub API integration
+    registration.ts        # Registration management
+  lib/
+    db.ts                  # Database client
+    crypto.ts              # Crypto utilities
+public/                    # Static assets
+tests/
+  setup.ts                 # Test setup (DB reset, auth helpers)
+  lib/
+    authenticator.ts       # Software FIDO authenticator
+  integration/
+    auth.integration.test.ts
+    device.integration.test.ts
+    registration.integration.test.ts
+    token.integration.test.ts
+```
 
 ## Docker Configuration
 
-### Project Structure
-
-```
-/
-├── src/
-│   ├── index.ts              # Entry point
-│   ├── app.ts                # Express app setup
-│   ├── db.ts                 # Database initialization
-│   ├── routes/
-│   │   ├── api.ts            # API routes
-│   │   └── web.ts            # Web UI routes
-│   ├── services/
-│   │   ├── auth.ts           # WebAuthn service
-│   │   ├── device.ts         # Device authorization
-│   │   ├── github.ts         # GitHub API integration
-│   │   └── registration.ts   # Registration management
-│   └── lib/
-│       ├── db.ts             # Database client
-│       └── crypto.ts         # Crypto utilities
-├── public/
-│   └── ...                   # Static assets
-├── tests/
-│   ├── setup.ts              # Test setup (DB reset, auth helpers)
-│   └── integration/
-│       ├── auth.integration.test.ts
-│       ├── device.integration.test.ts
-│       ├── registration.integration.test.ts
-│       └── token.integration.test.ts
-├── docker-compose.dev.yaml
-├── docker-compose.test.yaml
-├── docker-compose.coolify.yaml
-├── Dockerfile
-├── package.json
-├── tsconfig.json
-└── vitest.config.ts
-```
-
 ### docker-compose.dev.yaml
 
-For local development - keeps SQLite data in volume, not on host.
+Development environment with hot reload. SQLite data in Docker volume (not host).
 
 ```yaml
 services:
@@ -347,7 +262,7 @@ volumes:
 
 ### docker-compose.test.yaml
 
-For running integration tests - database is reset between test runs.
+Integration tests with database reset between runs.
 
 ```yaml
 services:
@@ -398,7 +313,7 @@ volumes:
 
 ### docker-compose.coolify.yaml
 
-For production deployment on Coolify.
+Production deployment on Coolify with persistent volume.
 
 ```yaml
 services:
@@ -433,8 +348,6 @@ volumes:
 
 ### Dockerfile
 
-Multi-stage build for development and production.
-
 ```dockerfile
 FROM node:22-alpine AS base
 WORKDIR /app
@@ -464,73 +377,30 @@ CMD ["npm", "start"]
 
 ### Principles
 
-1. **No mocking** — All tests run against real SQLite database and real Express app
-2. **Real WebAuthn** — Use software authenticator for FIDO testing
-3. **Isolated tests** — Database reset before each test file
-4. **Sequential execution** — Tests share database, run one at a time
+- **No mocking**: All tests run against real SQLite database and real Express app
+- **Real WebAuthn**: Software authenticator implements actual FIDO protocol
+- **Isolated tests**: Database reset before each test file
+- **Sequential execution**: `fileParallelism: false` since tests share database
 
 ### Test Stack
 
-- **Vitest** — Test runner with TypeScript support
-- **Supertest** — HTTP assertions against Express app
-- **@simplewebauthn/server** — WebAuthn implementation
-- **Software authenticator** — For testing WebAuthn flows without hardware
+- Vitest (test runner)
+- Supertest (HTTP assertions)
+- @simplewebauthn/server (WebAuthn implementation)
+- Custom SoftwareAuthenticator class (FIDO testing without hardware)
 
-### WebAuthn Testing Approach
+### WebAuthn Testing
 
-For integration tests, we use a software-based FIDO authenticator that implements the WebAuthn protocol. This allows us to:
-1. Register passkeys programmatically
-2. Authenticate without hardware
-3. Test the full auth flow end-to-end
+Software authenticator that implements WebAuthn protocol:
+1. Generates real ECDSA P-256 key pairs
+2. Creates valid attestation responses
+3. Signs authentication challenges
+4. No mocking of crypto operations
 
-```typescript
-// tests/lib/authenticator.ts
-import { generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
-import * as crypto from 'crypto';
-
-export class SoftwareAuthenticator {
-  private credentials: Map<string, { privateKey: CryptoKey; publicKey: Uint8Array }> = new Map();
-
-  async createCredential(challenge: Uint8Array, rpId: string): Promise<RegistrationCredential> {
-    // Generate key pair
-    const keyPair = await crypto.subtle.generateKey(
-      { name: 'ECDSA', namedCurve: 'P-256' },
-      true,
-      ['sign', 'verify']
-    );
-
-    const credentialId = crypto.randomBytes(32);
-    // ... create attestation response
-
-    this.credentials.set(credentialId.toString('base64url'), {
-      privateKey: keyPair.privateKey,
-      publicKey: /* encoded public key */
-    });
-
-    return /* credential response */;
-  }
-
-  async getAssertion(challenge: Uint8Array, rpId: string, credentialId: string): Promise<AuthenticationCredential> {
-    const cred = this.credentials.get(credentialId);
-    // ... create assertion with signature
-    return /* assertion response */;
-  }
-}
-```
-
-### Test Setup
+### Test Setup Pattern
 
 ```typescript
 // tests/setup.ts
-import { beforeEach, afterAll } from 'vitest';
-import { app } from '../src/app.ts';
-import { db } from '../src/lib/db.ts';
-import { SoftwareAuthenticator } from './lib/authenticator.ts';
-
-export const authenticator = new SoftwareAuthenticator();
-export { app };
-
-// Reset database before each test file
 beforeEach(async () => {
   await db.exec(`
     DELETE FROM registrations;
@@ -540,179 +410,18 @@ beforeEach(async () => {
   `);
 });
 
-afterAll(async () => {
-  await db.close();
-});
-
-// Helper to create authenticated session for tests
+// Helper creates real authenticated session via WebAuthn
 export async function createAuthenticatedSession(): Promise<string> {
-  // 1. Start WebAuthn registration
-  const regOptions = await request(app)
-    .post('/api/auth/register/options')
-    .expect(200);
-
-  // 2. Create credential with software authenticator
-  const credential = await authenticator.createCredential(
-    regOptions.body.challenge,
-    'localhost'
-  );
-
-  // 3. Complete registration
-  await request(app)
-    .post('/api/auth/register/verify')
-    .send(credential)
-    .expect(200);
-
-  // 4. Authenticate
-  const authOptions = await request(app)
-    .post('/api/auth/login/options')
-    .expect(200);
-
-  const assertion = await authenticator.getAssertion(
-    authOptions.body.challenge,
-    'localhost',
-    credential.id
-  );
-
-  const authResponse = await request(app)
-    .post('/api/auth/login/verify')
-    .send(assertion)
-    .expect(200);
-
-  return authResponse.headers['set-cookie'][0]; // Session cookie
+  // Full WebAuthn registration + authentication flow
+  // Returns session cookie
 }
-```
-
-### Example Integration Test
-
-```typescript
-// tests/integration/device.integration.test.ts
-import { describe, it, expect, beforeEach } from 'vitest';
-import request from 'supertest';
-import { app, createAuthenticatedSession } from '../setup.ts';
-
-describe('Device Authorization Flow', () => {
-  let sessionCookie: string;
-
-  beforeEach(async () => {
-    sessionCookie = await createAuthenticatedSession();
-  });
-
-  it('should complete full device authorization flow', async () => {
-    // 1. Devpod requests device code
-    const codeResponse = await request(app)
-      .post('/api/device/code')
-      .send({
-        devpod_name: 'my-devpod',
-        repos: ['org/repo-a', 'org/repo-b']
-      })
-      .expect(200);
-
-    expect(codeResponse.body).toMatchObject({
-      device_code: expect.any(String),
-      user_code: expect.stringMatching(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/),
-      verification_uri: expect.stringContaining('/device'),
-      expires_in: 900
-    });
-
-    const { device_code, user_code } = codeResponse.body;
-
-    // 2. Admin looks up the authorization
-    const pendingResponse = await request(app)
-      .get(`/api/device/pending/${user_code}`)
-      .set('Cookie', sessionCookie)
-      .expect(200);
-
-    expect(pendingResponse.body).toMatchObject({
-      devpod_name: 'my-devpod',
-      requested_repos: ['org/repo-a', 'org/repo-b']
-    });
-
-    // 3. Admin approves
-    await request(app)
-      .post('/api/device/authorize')
-      .set('Cookie', sessionCookie)
-      .send({ user_code, action: 'approve' })
-      .expect(200);
-
-    // 4. Devpod polls and receives token
-    const pollResponse = await request(app)
-      .post('/api/device/poll')
-      .send({ device_code })
-      .expect(200);
-
-    expect(pollResponse.body).toMatchObject({
-      registration_token: expect.any(String)
-    });
-
-    // 5. Verify registration was created
-    const registrations = await request(app)
-      .get('/api/registrations')
-      .set('Cookie', sessionCookie)
-      .expect(200);
-
-    expect(registrations.body).toHaveLength(1);
-    expect(registrations.body[0]).toMatchObject({
-      devpod_name: 'my-devpod',
-      allowed_repos: ['org/repo-a', 'org/repo-b'],
-      token_request_count: 0
-    });
-  });
-
-  it('should return authorization_pending while waiting', async () => {
-    const codeResponse = await request(app)
-      .post('/api/device/code')
-      .send({ devpod_name: 'waiting-devpod', repos: ['org/repo'] })
-      .expect(200);
-
-    // Poll without approval
-    const pollResponse = await request(app)
-      .post('/api/device/poll')
-      .send({ device_code: codeResponse.body.device_code })
-      .expect(200);
-
-    expect(pollResponse.body).toMatchObject({
-      error: 'authorization_pending'
-    });
-  });
-
-  it('should return access_denied when rejected', async () => {
-    const codeResponse = await request(app)
-      .post('/api/device/code')
-      .send({ devpod_name: 'rejected-devpod', repos: ['org/repo'] })
-      .expect(200);
-
-    // Admin denies
-    await request(app)
-      .post('/api/device/authorize')
-      .set('Cookie', sessionCookie)
-      .send({ user_code: codeResponse.body.user_code, action: 'deny' })
-      .expect(200);
-
-    // Poll returns denied
-    const pollResponse = await request(app)
-      .post('/api/device/poll')
-      .send({ device_code: codeResponse.body.device_code })
-      .expect(200);
-
-    expect(pollResponse.body).toMatchObject({
-      error: 'access_denied'
-    });
-  });
-});
 ```
 
 ### Running Tests
 
 ```bash
-# Run tests in Docker (recommended - uses isolated database)
-npm run docker:test
-
-# Reset test database
-npm run docker:reset-test-db
-
-# Run specific test file
-npm run docker:test -- tests/integration/device.integration.test.ts
+npm run docker:test              # Run all tests in Docker
+npm run docker:reset-test-db     # Reset test database
 ```
 
 ### vitest.config.ts
@@ -725,14 +434,14 @@ export default defineConfig({
     include: ['tests/**/*.integration.test.ts'],
     globals: true,
     setupFiles: ['tests/setup.ts'],
-    fileParallelism: false,  // Run sequentially - tests share database
+    fileParallelism: false,
     testTimeout: 10000,
     hookTimeout: 10000,
   },
 });
 ```
 
-### Package Scripts
+## Package Scripts
 
 ```json
 {
@@ -749,87 +458,61 @@ export default defineConfig({
 }
 ```
 
-## Implementation Tasks
+## Implementation Phases
 
 ### Phase 1: Core Infrastructure
-- [ ] Set up Express server with TypeScript
-- [ ] Define TypeScript interfaces for all data structures
-- [ ] Implement SQLite database initialization and migrations
-- [ ] Add configuration loading (env vars)
-- [ ] Set up Docker Compose for development
-- [ ] Create health check endpoint
+- Express server with TypeScript (--strip-types)
+- SQLite database initialization
+- Configuration loading (env vars)
+- Docker Compose for development
+- Health check endpoint
 
 ### Phase 2: WebAuthn Authentication
-- [ ] Implement WebAuthn registration flow (initial admin setup)
-- [ ] Implement WebAuthn authentication flow (login)
-- [ ] Add session management (secure cookies)
-- [ ] Create auth middleware for protected routes
-- [ ] Build software authenticator for testing
-- [ ] Write auth integration tests
+- WebAuthn registration flow (initial admin setup)
+- WebAuthn authentication flow (login)
+- Session management (secure cookies)
+- Auth middleware for protected routes
+- Software authenticator for testing
+- Auth integration tests
 
 ### Phase 3: Device Authorization Flow
-- [ ] Implement `POST /api/device/code` endpoint
-- [ ] Generate secure device_code and user-friendly user_code
-- [ ] Implement `POST /api/device/poll` endpoint with RFC 8628 responses
-- [ ] Implement `GET /api/device/pending/:code` for admin lookup
-- [ ] Implement `POST /api/device/authorize` for approve/deny
-- [ ] Generate and hash registration tokens
-- [ ] Write device flow integration tests
+- `POST /api/device/code` endpoint
+- Secure device_code + user-friendly user_code generation
+- `POST /api/device/poll` with RFC 8628 responses
+- `GET /api/device/pending/:code` for admin lookup
+- `POST /api/device/authorize` for approve/deny
+- Registration token generation and hashing
+- Device flow integration tests
 
 ### Phase 4: Token Generation
-- [ ] Implement GitHub App JWT generation
-- [ ] Implement installation token request to GitHub API
-- [ ] Add repository scoping for tokens
-- [ ] Implement `POST /api/token` endpoint
-- [ ] Verify registration token on requests
-- [ ] Update usage statistics on token request
-- [ ] Write token generation integration tests
+- GitHub App JWT generation
+- Installation token request to GitHub API
+- Repository scoping
+- `POST /api/token` endpoint
+- Registration token verification
+- Usage statistics update
+- Token generation integration tests
 
 ### Phase 5: Admin Dashboard
-- [ ] Set up static file serving for web UI
-- [ ] Build login page with WebAuthn
-- [ ] Build dashboard listing registrations with stats
-- [ ] Build device authorization page
-- [ ] Implement revocation with confirmation
-- [ ] Add basic styling
+- Static file serving for web UI
+- Login page with WebAuthn
+- Dashboard listing registrations with stats
+- Device authorization page
+- Revocation with confirmation
 
 ### Phase 6: Production Readiness
-- [ ] Create production Dockerfile
-- [ ] Set up docker-compose.coolify.yaml
-- [ ] Add request logging
-- [ ] Add rate limiting
-- [ ] Document deployment process
-- [ ] Set up docker-compose.test.yaml and test runner
+- Production Dockerfile
+- docker-compose.coolify.yaml
+- Request logging
+- Rate limiting
+- Deployment documentation
 
 ## Tech Decisions
 
-### Why WebAuthn/Passkeys?
-- Phishing-resistant authentication
-- Works with YubiKey and built-in platform authenticators
-- No passwords to manage or leak
-- Physical presence required for each login
-
-### Why Device Authorization Flow?
-- Works well for CLI applications
-- User doesn't need to copy/paste long tokens into terminal
-- Clear confirmation of what's being authorized
-- Standard pattern users recognize from GitHub, Google, etc.
-
-### Why SQLite?
-- Zero configuration, single file
-- Perfect for single-admin service
-- Easy backup (just copy the file)
-- No separate database server needed
-- Works well with Docker volumes
-
-### Why Supertest + Real Database?
-- Tests actual behavior, not mocked assumptions
-- Catches integration issues early
-- Database is fast (SQLite in-memory or file)
-- Following patterns from todo-app reference implementation
-
-### Why Software Authenticator for Tests?
-- Enables full WebAuthn testing without hardware
-- Tests complete auth flows end-to-end
-- No mocking of security-critical code
-- Validates actual cryptographic operations
+| Decision | Rationale |
+|----------|-----------|
+| WebAuthn/Passkeys | Phishing-resistant, works with YubiKey, no passwords, requires physical presence |
+| Device Authorization Flow (RFC 8628) | Works for CLI apps, familiar pattern (GitHub/Google), clear authorization confirmation |
+| SQLite | Zero config, single file, easy backup, no separate server, works well with Docker volumes |
+| Supertest + Real Database | Tests actual behavior, catches integration issues, fast with SQLite |
+| Software Authenticator | Full WebAuthn testing without hardware, no mocking of security code |
