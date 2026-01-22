@@ -1,0 +1,139 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="Login">
+  <div class="container" style="max-width: 400px; margin-top: 4rem;">
+    <div class="card">
+      <h1 style="text-align: center;">GitHub Token Service</h1>
+      <p style="text-align: center; color: #666; margin-bottom: 2rem;">Admin Login</p>
+
+      <div id="error" class="alert alert-error" style="display: none;"></div>
+
+      <button id="login-btn" class="btn btn-primary" style="width: 100%;">
+        Login with Passkey
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const loginBtn = document.getElementById('login-btn') as HTMLButtonElement;
+    const errorDiv = document.getElementById('error') as HTMLDivElement;
+
+    function showError(message: string) {
+      errorDiv.textContent = message;
+      errorDiv.style.display = 'block';
+    }
+
+    function hideError() {
+      errorDiv.style.display = 'none';
+    }
+
+    loginBtn.addEventListener('click', async () => {
+      hideError();
+      loginBtn.disabled = true;
+      loginBtn.textContent = 'Authenticating...';
+
+      try {
+        // Get authentication options
+        const optionsRes = await fetch('/api/auth/login/options', {
+          method: 'POST',
+          credentials: 'include',
+        });
+
+        if (!optionsRes.ok) {
+          const data = await optionsRes.json();
+          throw new Error(data.error || 'Failed to get authentication options');
+        }
+
+        const options = await optionsRes.json();
+
+        // Convert base64url to ArrayBuffer
+        function base64urlToBuffer(base64url: string): ArrayBuffer {
+          const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+          const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+          const binary = atob(base64 + padding);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          return bytes.buffer;
+        }
+
+        // Convert ArrayBuffer to base64url
+        function bufferToBase64url(buffer: ArrayBuffer): string {
+          const bytes = new Uint8Array(buffer);
+          let binary = '';
+          for (let i = 0; i < bytes.byteLength; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const base64 = btoa(binary);
+          return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+        }
+
+        // Prepare credential request options
+        const credentialRequestOptions: CredentialRequestOptions = {
+          publicKey: {
+            challenge: base64urlToBuffer(options.challenge),
+            rpId: options.rpId,
+            allowCredentials: options.allowCredentials?.map(
+              (cred: { id: string; type: string }) => ({
+                id: base64urlToBuffer(cred.id),
+                type: cred.type,
+              })
+            ),
+            userVerification: options.userVerification || 'preferred',
+            timeout: options.timeout || 60000,
+          },
+        };
+
+        // Request credential
+        const credential = (await navigator.credentials.get(
+          credentialRequestOptions
+        )) as PublicKeyCredential;
+
+        if (!credential) {
+          throw new Error('No credential received');
+        }
+
+        const response = credential.response as AuthenticatorAssertionResponse;
+
+        // Prepare verification payload
+        const verificationPayload = {
+          id: credential.id,
+          rawId: bufferToBase64url(credential.rawId),
+          response: {
+            authenticatorData: bufferToBase64url(response.authenticatorData),
+            clientDataJSON: bufferToBase64url(response.clientDataJSON),
+            signature: bufferToBase64url(response.signature),
+            userHandle: response.userHandle ? bufferToBase64url(response.userHandle) : undefined,
+          },
+          type: credential.type,
+          clientExtensionResults: credential.getClientExtensionResults(),
+          authenticatorAttachment: (credential as any).authenticatorAttachment,
+        };
+
+        // Verify with server
+        const verifyRes = await fetch('/api/auth/login/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(verificationPayload),
+        });
+
+        if (!verifyRes.ok) {
+          const data = await verifyRes.json();
+          throw new Error(data.error || 'Authentication failed');
+        }
+
+        // Redirect to dashboard
+        window.location.href = '/admin/dashboard';
+      } catch (error) {
+        console.error('Login error:', error);
+        showError(error instanceof Error ? error.message : 'Authentication failed');
+        loginBtn.disabled = false;
+        loginBtn.textContent = 'Login with Passkey';
+      }
+    });
+  </script>
+</BaseLayout>

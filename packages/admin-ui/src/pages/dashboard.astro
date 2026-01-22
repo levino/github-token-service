@@ -1,0 +1,149 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="Dashboard">
+  <nav class="nav">
+    <a href="/admin/dashboard">Dashboard</a>
+    <a href="/admin/device">Authorize Device</a>
+    <a href="#" id="logout-link">Logout</a>
+  </nav>
+
+  <div class="container">
+    <h1>Registered Devpods</h1>
+
+    <div id="loading" class="card">Loading...</div>
+    <div id="error" class="alert alert-error" style="display: none;"></div>
+    <div id="registrations-container" style="display: none;">
+      <table id="registrations-table">
+        <thead>
+          <tr>
+            <th>Devpod Name</th>
+            <th>Repositories</th>
+            <th>Created</th>
+            <th>Last Used</th>
+            <th>Requests</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="registrations-body"></tbody>
+      </table>
+      <p id="empty-message" class="card" style="display: none; text-align: center; color: #666;">
+        No registered devpods yet.
+      </p>
+    </div>
+  </div>
+
+  <script>
+    const loadingDiv = document.getElementById('loading') as HTMLDivElement;
+    const errorDiv = document.getElementById('error') as HTMLDivElement;
+    const container = document.getElementById('registrations-container') as HTMLDivElement;
+    const tbody = document.getElementById('registrations-body') as HTMLTableSectionElement;
+    const emptyMessage = document.getElementById('empty-message') as HTMLParagraphElement;
+    const logoutLink = document.getElementById('logout-link') as HTMLAnchorElement;
+
+    function showError(message: string) {
+      loadingDiv.style.display = 'none';
+      errorDiv.textContent = message;
+      errorDiv.style.display = 'block';
+    }
+
+    function formatDate(dateStr: string | null): string {
+      if (!dateStr) return 'Never';
+      return new Date(dateStr).toLocaleString();
+    }
+
+    async function loadRegistrations() {
+      try {
+        const res = await fetch('/api/registrations', {
+          credentials: 'include',
+        });
+
+        if (res.status === 401) {
+          window.location.href = '/admin';
+          return;
+        }
+
+        if (!res.ok) {
+          throw new Error('Failed to load registrations');
+        }
+
+        const registrations = await res.json();
+        loadingDiv.style.display = 'none';
+        container.style.display = 'block';
+
+        if (registrations.length === 0) {
+          emptyMessage.style.display = 'block';
+          return;
+        }
+
+        tbody.innerHTML = registrations
+          .map(
+            (reg: any) => `
+          <tr>
+            <td>${escapeHtml(reg.devpod_name)}</td>
+            <td>${escapeHtml(JSON.parse(reg.allowed_repos).join(', '))}</td>
+            <td>${formatDate(reg.created_at)}</td>
+            <td>${formatDate(reg.last_token_request)}</td>
+            <td>${reg.token_request_count}</td>
+            <td>
+              <span class="badge ${reg.revoked_at ? 'badge-revoked' : 'badge-active'}">
+                ${reg.revoked_at ? 'Revoked' : 'Active'}
+              </span>
+            </td>
+            <td>
+              ${
+                reg.revoked_at
+                  ? ''
+                  : `<button class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.875rem;" onclick="revokeRegistration('${reg.id}')">Revoke</button>`
+              }
+            </td>
+          </tr>
+        `
+          )
+          .join('');
+      } catch (error) {
+        showError(error instanceof Error ? error.message : 'Failed to load registrations');
+      }
+    }
+
+    function escapeHtml(str: string): string {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    (window as any).revokeRegistration = async (id: string) => {
+      if (!confirm('Are you sure you want to revoke this registration?')) {
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/registrations/${id}`, {
+          method: 'DELETE',
+          credentials: 'include',
+        });
+
+        if (!res.ok) {
+          throw new Error('Failed to revoke registration');
+        }
+
+        loadRegistrations();
+      } catch (error) {
+        alert(error instanceof Error ? error.message : 'Failed to revoke registration');
+      }
+    };
+
+    logoutLink.addEventListener('click', async (e) => {
+      e.preventDefault();
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      window.location.href = '/admin';
+    });
+
+    loadRegistrations();
+  </script>
+</BaseLayout>

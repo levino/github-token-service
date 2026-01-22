@@ -1,0 +1,190 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="Device Authorization">
+  <nav class="nav">
+    <a href="/admin/dashboard">Dashboard</a>
+    <a href="/admin/device">Authorize Device</a>
+    <a href="#" id="logout-link">Logout</a>
+  </nav>
+
+  <div class="container" style="max-width: 500px;">
+    <h1>Authorize Device</h1>
+
+    <div class="card">
+      <p style="margin-bottom: 1rem; color: #666;">
+        Enter the code displayed on your devpod CLI to authorize it.
+      </p>
+
+      <form id="lookup-form">
+        <input
+          type="text"
+          id="user-code"
+          placeholder="Enter code (e.g., ABCD-1234)"
+          pattern="[A-Z0-9]{4}-[A-Z0-9]{4}"
+          style="text-transform: uppercase; text-align: center; font-size: 1.25rem; letter-spacing: 0.1em;"
+        />
+        <button type="submit" class="btn btn-primary" style="width: 100%;">Look Up</button>
+      </form>
+    </div>
+
+    <div id="pending-card" class="card" style="display: none;">
+      <h2 style="margin-bottom: 1rem;">Authorization Request</h2>
+
+      <div style="margin-bottom: 1rem;">
+        <strong>Devpod Name:</strong>
+        <span id="devpod-name"></span>
+      </div>
+
+      <div style="margin-bottom: 1rem;">
+        <strong>Requested Repositories:</strong>
+        <ul id="repos-list" style="margin-top: 0.5rem; padding-left: 1.5rem;"></ul>
+      </div>
+
+      <div style="margin-bottom: 1.5rem;">
+        <strong>Requested:</strong>
+        <span id="created-at"></span>
+      </div>
+
+      <div style="display: flex; gap: 1rem;">
+        <button id="approve-btn" class="btn btn-success" style="flex: 1;">Approve</button>
+        <button id="deny-btn" class="btn btn-danger" style="flex: 1;">Deny</button>
+      </div>
+    </div>
+
+    <div id="error" class="alert alert-error" style="display: none;"></div>
+    <div id="success" class="alert alert-success" style="display: none;"></div>
+  </div>
+
+  <script>
+    const lookupForm = document.getElementById('lookup-form') as HTMLFormElement;
+    const userCodeInput = document.getElementById('user-code') as HTMLInputElement;
+    const pendingCard = document.getElementById('pending-card') as HTMLDivElement;
+    const devpodNameSpan = document.getElementById('devpod-name') as HTMLSpanElement;
+    const reposList = document.getElementById('repos-list') as HTMLUListElement;
+    const createdAtSpan = document.getElementById('created-at') as HTMLSpanElement;
+    const approveBtn = document.getElementById('approve-btn') as HTMLButtonElement;
+    const denyBtn = document.getElementById('deny-btn') as HTMLButtonElement;
+    const errorDiv = document.getElementById('error') as HTMLDivElement;
+    const successDiv = document.getElementById('success') as HTMLDivElement;
+    const logoutLink = document.getElementById('logout-link') as HTMLAnchorElement;
+
+    let currentUserCode = '';
+
+    function showError(message: string) {
+      errorDiv.textContent = message;
+      errorDiv.style.display = 'block';
+      successDiv.style.display = 'none';
+    }
+
+    function showSuccess(message: string) {
+      successDiv.textContent = message;
+      successDiv.style.display = 'block';
+      errorDiv.style.display = 'none';
+    }
+
+    function hideMessages() {
+      errorDiv.style.display = 'none';
+      successDiv.style.display = 'none';
+    }
+
+    function formatDate(dateStr: string): string {
+      return new Date(dateStr).toLocaleString();
+    }
+
+    lookupForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideMessages();
+      pendingCard.style.display = 'none';
+
+      const code = userCodeInput.value.toUpperCase().trim();
+      if (!code.match(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/)) {
+        showError('Invalid code format. Expected format: XXXX-XXXX');
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/device/pending/${code}`, {
+          credentials: 'include',
+        });
+
+        if (res.status === 401) {
+          window.location.href = '/admin';
+          return;
+        }
+
+        if (res.status === 404) {
+          showError('Code not found or already processed.');
+          return;
+        }
+
+        if (!res.ok) {
+          throw new Error('Failed to look up code');
+        }
+
+        const data = await res.json();
+        currentUserCode = code;
+
+        devpodNameSpan.textContent = data.devpod_name;
+        reposList.innerHTML = data.requested_repos
+          .map((repo: string) => `<li>${escapeHtml(repo)}</li>`)
+          .join('');
+        createdAtSpan.textContent = formatDate(data.created_at);
+
+        pendingCard.style.display = 'block';
+      } catch (error) {
+        showError(error instanceof Error ? error.message : 'Failed to look up code');
+      }
+    });
+
+    function escapeHtml(str: string): string {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    async function authorize(action: 'approve' | 'deny') {
+      hideMessages();
+      approveBtn.disabled = true;
+      denyBtn.disabled = true;
+
+      try {
+        const res = await fetch('/api/device/authorize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            user_code: currentUserCode,
+            action,
+          }),
+        });
+
+        if (!res.ok) {
+          throw new Error('Failed to process authorization');
+        }
+
+        pendingCard.style.display = 'none';
+        userCodeInput.value = '';
+        showSuccess(action === 'approve' ? 'Device authorized successfully!' : 'Authorization denied.');
+      } catch (error) {
+        showError(error instanceof Error ? error.message : 'Failed to process authorization');
+      } finally {
+        approveBtn.disabled = false;
+        denyBtn.disabled = false;
+      }
+    }
+
+    approveBtn.addEventListener('click', () => authorize('approve'));
+    denyBtn.addEventListener('click', () => authorize('deny'));
+
+    logoutLink.addEventListener('click', async (e) => {
+      e.preventDefault();
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      window.location.href = '/admin';
+    });
+  </script>
+</BaseLayout>
