@@ -40,6 +40,8 @@ src/
 - No enums or namespaces (not supported by strip-types)
 - Use `import type` for type-only imports
 - Keep dependencies minimal - prefer Node.js built-in modules
+- **No classes** - use plain functions and factory functions for stateful modules
+- Functional programming style - avoid OOP patterns
 
 ## Architecture
 

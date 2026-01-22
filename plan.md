@@ -195,20 +195,25 @@ Pure TypeScript implementation for headless development and testing. No browser 
 
 ```typescript
 // packages/server/tests/lib/software-authenticator.ts
-export class SoftwareAuthenticator {
-  private credentials = new Map<string, { privateKey: CryptoKey; publicKey: Uint8Array }>();
 
-  // Create a new credential (like YubiKey would during registration)
-  async createCredential(rpId: string, challenge: Uint8Array): Promise<{
-    credentialId: string;
-    publicKey: string;  // COSE format, base64
-  }>;
+// Factory function - returns authenticator with internal state
+export function createSoftwareAuthenticator() {
+  const credentials = new Map<string, { privateKey: CryptoKey; publicKey: Uint8Array }>();
 
-  // Sign a challenge (like YubiKey would during authentication)
-  async sign(credentialId: string, challenge: Uint8Array): Promise<{
-    authenticatorData: Uint8Array;
-    signature: Uint8Array;
-  }>;
+  return {
+    // Create a new credential (like YubiKey would during registration)
+    createCredential: async (rpId: string, challenge: Uint8Array): Promise<{
+      credentialId: string;
+      publicKey: string;  // COSE format, base64
+      privateKey: string; // For signing in tests
+    }> => { /* ... */ },
+
+    // Sign a challenge (like YubiKey would during authentication)
+    sign: async (credentialId: string, challenge: Uint8Array): Promise<{
+      authenticatorData: Uint8Array;
+      signature: Uint8Array;
+    }> => { /* ... */ },
+  };
 }
 ```
 
@@ -488,15 +493,15 @@ volumes:
 - Vitest (test runner)
 - Supertest (HTTP assertions)
 - @simplewebauthn/server (WebAuthn server-side verification)
-- SoftwareAuthenticator class (pure TypeScript, generates keys and signs challenges)
+- createSoftwareAuthenticator factory (pure TypeScript, generates keys and signs challenges)
 
 ### WebAuthn Test Flow
 
 ```typescript
 // packages/server/tests/integration/auth.integration.test.ts
-import { SoftwareAuthenticator } from '../lib/software-authenticator.ts';
+import { createSoftwareAuthenticator } from '../lib/software-authenticator.ts';
 
-const authenticator = new SoftwareAuthenticator();
+const authenticator = createSoftwareAuthenticator();
 
 it('should authenticate with passkey', async () => {
   // 1. Create credential with software authenticator
