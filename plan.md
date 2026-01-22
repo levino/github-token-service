@@ -189,29 +189,49 @@ The private key **never leaves the YubiKey**. During login:
 3. YubiKey signs internally, returns signature
 4. Server verifies signature using stored public key
 
-### Development Without YubiKey
+### Software Authenticator (Development & Testing)
 
-**Option 1: Chrome Virtual Authenticator (recommended)**
-1. Open Chrome DevTools → More tools → WebAuthn
-2. Enable virtual authenticator
-3. Use the admin CLI to see what credential ID/public key are generated
-4. Chrome's virtual authenticator handles the signing
+Pure TypeScript implementation for headless development and testing. No browser or hardware needed.
 
-**Option 2: Dev bypass (for quick local testing)**
+```typescript
+// packages/server/tests/lib/software-authenticator.ts
+export class SoftwareAuthenticator {
+  private credentials = new Map<string, { privateKey: CryptoKey; publicKey: Uint8Array }>();
+
+  // Create a new credential (like YubiKey would during registration)
+  async createCredential(rpId: string, challenge: Uint8Array): Promise<{
+    credentialId: string;
+    publicKey: string;  // COSE format, base64
+  }>;
+
+  // Sign a challenge (like YubiKey would during authentication)
+  async sign(credentialId: string, challenge: Uint8Array): Promise<{
+    authenticatorData: Uint8Array;
+    signature: Uint8Array;
+  }>;
+}
+```
+
+**For admin CLI in dev mode:**
+```bash
+npx @levino/github-token-admin create-passkey --rp-id localhost --software
+# Uses SoftwareAuthenticator, outputs ADMIN_CREDENTIAL with embedded private key
+```
+
+When `--software` flag is used, the credential includes the private key so the server can verify authentication in tests:
+```json
+{
+  "credentialId": "base64...",
+  "publicKey": "base64...",
+  "privateKey": "base64..."  // Only present with --software flag
+}
+```
+
+**Dev bypass for quick local testing:**
 ```bash
 # Server accepts dev token when NODE_ENV=development
 curl -H "X-Dev-Auth: 1" http://localhost:3000/api/...
 ```
-
-### Integration Tests
-
-For automated tests, we use a SoftwareAuthenticator class that:
-1. Generates ECDSA P-256 key pairs
-2. Creates valid attestation responses (registration)
-3. Signs challenges with the private key (authentication)
-4. Works entirely in Node.js - no browser needed
-
-The software authenticator holds its own private keys in memory (unlike production where keys stay on YubiKey).
 
 ## Admin Dashboard Features
 
@@ -467,8 +487,46 @@ volumes:
 
 - Vitest (test runner)
 - Supertest (HTTP assertions)
-- @simplewebauthn/server (WebAuthn implementation)
-- Custom SoftwareAuthenticator class (FIDO testing without hardware)
+- @simplewebauthn/server (WebAuthn server-side verification)
+- SoftwareAuthenticator class (pure TypeScript, generates keys and signs challenges)
+
+### WebAuthn Test Flow
+
+```typescript
+// packages/server/tests/integration/auth.integration.test.ts
+import { SoftwareAuthenticator } from '../lib/software-authenticator.ts';
+
+const authenticator = new SoftwareAuthenticator();
+
+it('should authenticate with passkey', async () => {
+  // 1. Create credential with software authenticator
+  const credential = await authenticator.createCredential('localhost', challenge);
+
+  // 2. Set ADMIN_CREDENTIAL env var (includes private key for signing)
+  process.env.ADMIN_CREDENTIAL = JSON.stringify({
+    credentialId: credential.credentialId,
+    publicKey: credential.publicKey,
+    privateKey: credential.privateKey,  // Needed for software auth to sign
+  });
+
+  // 3. Get authentication challenge from server
+  const { body: options } = await request(app)
+    .post('/api/auth/login/options')
+    .expect(200);
+
+  // 4. Sign challenge with software authenticator
+  const assertion = await authenticator.sign(credential.credentialId, options.challenge);
+
+  // 5. Verify with server
+  const { headers } = await request(app)
+    .post('/api/auth/login/verify')
+    .send(assertion)
+    .expect(200);
+
+  // 6. Use session cookie for authenticated requests
+  const sessionCookie = headers['set-cookie'][0];
+});
+```
 
 ### Test Setup Pattern
 
